@@ -22,6 +22,18 @@ Credentials are stored in `~/.config/ytcli/ytcli.config.json` (chmod 600).
 
 Re-run `ytcli register` at any time to re-authenticate.
 
+## Commands
+
+```sh
+ytcli register                         # OAuth setup (run once)
+ytcli playlists list [--json] [--max N]
+ytcli playlist  list <playlist_id> [--json] [--max N]
+```
+
+`playlists list` lists your playlists. `playlist list <id>` lists the items
+inside one playlist. Both auto-paginate; `--max` caps the result count and
+`--json` emits the raw YouTube Data API resource objects.
+
 ## Config
 
 Location: `$XDG_CONFIG_HOME/ytcli/ytcli.config.json`, or
