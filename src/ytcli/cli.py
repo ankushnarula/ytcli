@@ -1,9 +1,40 @@
 import argparse
 import json
+import re
 import sys
 from typing import Any, Callable, Iterable
+from urllib.parse import parse_qs, urlparse
 
 from . import auth, client, config
+
+
+_VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+
+
+def _extract_video_id(value: str) -> str:
+    s = value.strip()
+    if _VIDEO_ID_RE.match(s):
+        return s
+    parsed = urlparse(s if "://" in s else f"https://{s}")
+    host = (parsed.hostname or "").lower().removeprefix("www.")
+    candidate: str | None = None
+    if host == "youtu.be":
+        candidate = parsed.path.lstrip("/").split("/", 1)[0]
+    elif host in ("youtube.com", "m.youtube.com", "music.youtube.com"):
+        if parsed.path == "/watch":
+            v = parse_qs(parsed.query).get("v")
+            if v:
+                candidate = v[0]
+        else:
+            parts = parsed.path.lstrip("/").split("/")
+            if len(parts) >= 2 and parts[0] in ("shorts", "live", "embed", "v"):
+                candidate = parts[1]
+    if candidate and _VIDEO_ID_RE.match(candidate):
+        return candidate
+    raise SystemExit(
+        f"Could not extract a YouTube video ID from: {value!r}\n"
+        "Expected an 11-character ID or a youtube.com/youtu.be URL."
+    )
 
 
 def _cmd_register(args: argparse.Namespace) -> int:
@@ -124,10 +155,11 @@ def _cmd_playlists_delete(args: argparse.Namespace) -> int:
 
 
 def _cmd_playlist_add_item(args: argparse.Namespace) -> int:
+    video_id = _extract_video_id(args.video_id)
     yt = client.youtube()
     snippet: dict[str, Any] = {
         "playlistId": args.playlist_id,
-        "resourceId": {"kind": "youtube#video", "videoId": args.video_id},
+        "resourceId": {"kind": "youtube#video", "videoId": video_id},
     }
     if args.position is not None:
         snippet["position"] = args.position
@@ -136,7 +168,7 @@ def _cmd_playlist_add_item(args: argparse.Namespace) -> int:
         print(json.dumps(item, indent=2))
     else:
         title = item.get("snippet", {}).get("title", "")
-        print(f"{item['id']}\t{args.video_id}\t{title}")
+        print(f"{item['id']}\t{video_id}\t{title}")
     return 0
 
 
@@ -221,7 +253,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
     pl_add = pl_sub.add_parser("add-item", help="Add a video to a playlist.")
     pl_add.add_argument("playlist_id", help="YouTube playlist ID.")
-    pl_add.add_argument("video_id", help="YouTube video ID.")
+    pl_add.add_argument(
+        "video_id",
+        help="YouTube video ID or any youtube.com/youtu.be URL.",
+    )
     pl_add.add_argument(
         "--position", type=int, default=None, help="0-based insert position (default: end)."
     )
