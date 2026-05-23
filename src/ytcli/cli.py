@@ -5,11 +5,22 @@ from typing import Any, Callable, Iterable
 from . import auth, client, config
 
 
-def _cmd_register(_args: argparse.Namespace) -> int:
+def _cmd_register(args: argparse.Namespace) -> int:
     cfg = config.load()
-    cfg = auth.register(cfg)
+    cfg = auth.register(cfg, reset=args.reset)
     config.save(cfg)
     print(f"Credentials saved to {config.CONFIG_PATH}")
+    return 0
+
+
+def _cmd_unregister(args: argparse.Namespace) -> int:
+    cfg = config.load()
+    cfg, cleared = auth.unregister(cfg, all_=args.all)
+    if not cleared:
+        print("Nothing to clear.")
+        return 0
+    config.save(cfg)
+    print(f"Cleared from {config.CONFIG_PATH}: {', '.join(cleared)}")
     return 0
 
 
@@ -96,7 +107,20 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", metavar="<command>")
 
     p_register = sub.add_parser("register", help="Authenticate with YouTube and store credentials.")
+    p_register.add_argument(
+        "--reset",
+        action="store_true",
+        help="Re-prompt for client_id/secret even if already saved.",
+    )
     p_register.set_defaults(func=_cmd_register)
+
+    p_unregister = sub.add_parser("unregister", help="Clear stored credentials.")
+    p_unregister.add_argument(
+        "--all",
+        action="store_true",
+        help="Also clear the saved OAuth client_id/secret (full reset).",
+    )
+    p_unregister.set_defaults(func=_cmd_unregister)
 
     p_playlists = sub.add_parser("playlists", help="Operate on the collection of your playlists.")
     p_playlists.set_defaults(func=_help_for(p_playlists))

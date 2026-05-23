@@ -25,7 +25,8 @@ Re-run `ytcli register` at any time to re-authenticate.
 ## Commands
 
 ```sh
-ytcli register                         # OAuth setup (run once)
+ytcli register   [--reset]             # OAuth setup; --reset re-prompts for client_id/secret
+ytcli unregister [--all]               # Clear credentials; --all also clears the OAuth client
 ytcli playlists list [--json] [--max N]
 ytcli playlist  list <playlist_id> [--json] [--max N]
 ```
