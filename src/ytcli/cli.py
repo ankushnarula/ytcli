@@ -173,9 +173,38 @@ def _cmd_playlist_add_item(args: argparse.Namespace) -> int:
 
 
 def _cmd_playlist_remove_item(args: argparse.Namespace) -> int:
+    video_id = _extract_video_id(args.video_id)
     yt = client.youtube()
-    yt.playlistItems().delete(id=args.playlist_item_id).execute()
-    print(f"Removed playlist item {args.playlist_item_id}")
+    matches = _paginate(
+        yt.playlistItems().list,
+        None,
+        part="id,snippet",
+        playlistId=args.playlist_id,
+        videoId=video_id,
+        maxResults=50,
+    )
+    if not matches:
+        print(
+            f"Video {video_id} is not in playlist {args.playlist_id}.",
+            file=sys.stderr,
+        )
+        return 1
+    if len(matches) > 1 and not args.all:
+        print(
+            f"Video {video_id} appears {len(matches)} times in playlist "
+            f"{args.playlist_id}:",
+            file=sys.stderr,
+        )
+        for m in matches:
+            print(
+                f"  position {m['snippet']['position']}\t{m['id']}",
+                file=sys.stderr,
+            )
+        print("Re-run with --all to remove every occurrence.", file=sys.stderr)
+        return 1
+    for m in matches:
+        yt.playlistItems().delete(id=m["id"]).execute()
+        print(f"Removed playlist item {m['id']} (position {m['snippet']['position']})")
     return 0
 
 
@@ -263,10 +292,16 @@ def _build_parser() -> argparse.ArgumentParser:
     pl_add.add_argument("--json", action="store_true", help="Emit raw JSON.")
     pl_add.set_defaults(func=_cmd_playlist_add_item)
 
-    pl_remove = pl_sub.add_parser("remove-item", help="Remove an item from a playlist.")
+    pl_remove = pl_sub.add_parser("remove-item", help="Remove a video from a playlist.")
+    pl_remove.add_argument("playlist_id", help="YouTube playlist ID.")
     pl_remove.add_argument(
-        "playlist_item_id",
-        help="Playlist item ID (NOT the video ID; see `ytcli playlist list`).",
+        "video_id",
+        help="YouTube video ID or any youtube.com/youtu.be URL.",
+    )
+    pl_remove.add_argument(
+        "--all",
+        action="store_true",
+        help="Remove every occurrence if the video appears in the playlist multiple times.",
     )
     pl_remove.set_defaults(func=_cmd_playlist_remove_item)
 

@@ -35,13 +35,13 @@ ytcli playlists create <title> [--description D]             #   ...new playlist
 ytcli playlists delete <playlist_id> [-y]                    #   ...delete (prompts unless -y)
 
 ytcli playlist list <playlist_id> [--json] [--max N]         # Items in a playlist
-ytcli playlist add-item <playlist_id> <video_id>             #   ...append (or --position N)
+ytcli playlist add-item <playlist_id> <video>                #   ...append (or --position N)
                         [--position N] [--json]
-ytcli playlist remove-item <playlist_item_id>                #   ...remove by playlistItemId
+ytcli playlist remove-item <playlist_id> <video> [--all]     #   ...remove (errors on duplicates without --all)
 ```
 
-`playlist list` prints `position \t playlistItemId \t videoId \t title` (tab-separated); the
-`playlistItemId` from that output is what `remove-item` takes — distinct from the videoId.
+`<video>` is either an 11-char YouTube video ID or any youtube.com/youtu.be URL.
+`playlist list` prints `position \t playlistItemId \t videoId \t title` (tab-separated).
 
 `playlists list` lists your playlists. `playlist list <id>` lists the items
 inside one playlist. Both auto-paginate; `--max` caps the result count and
