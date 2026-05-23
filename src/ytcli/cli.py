@@ -1,5 +1,6 @@
 import argparse
 import json
+import sys
 from typing import Any, Callable, Iterable
 
 from . import auth, client, config
@@ -78,11 +79,71 @@ def _cmd_playlist_list(args: argparse.Namespace) -> int:
         items,
         args.json,
         lambda it: (
-            f"{it['snippet']['position']:>3}  "
-            f"{it['contentDetails']['videoId']}  "
+            f"{it['snippet']['position']}\t"
+            f"{it['id']}\t"
+            f"{it['contentDetails']['videoId']}\t"
             f"{it['snippet']['title']}"
         ),
     )
+    return 0
+
+
+def _cmd_playlists_create(args: argparse.Namespace) -> int:
+    yt = client.youtube()
+    snippet: dict[str, Any] = {"title": args.title}
+    if args.description is not None:
+        snippet["description"] = args.description
+    body = {"snippet": snippet, "status": {"privacyStatus": args.privacy}}
+    pl = yt.playlists().insert(part="snippet,status", body=body).execute()
+    if args.json:
+        print(json.dumps(pl, indent=2))
+    else:
+        print(f"{pl['id']}\t{pl['snippet']['title']}")
+    return 0
+
+
+def _cmd_playlists_delete(args: argparse.Namespace) -> int:
+    if not args.yes:
+        if not sys.stdin.isatty():
+            print(
+                f"Refusing to delete {args.playlist_id} without --yes "
+                "in a non-interactive shell.",
+                file=sys.stderr,
+            )
+            return 1
+        reply = input(
+            f"Delete playlist {args.playlist_id}? This cannot be undone. [y/N] "
+        ).strip().lower()
+        if reply not in ("y", "yes"):
+            print("Cancelled.")
+            return 1
+    yt = client.youtube()
+    yt.playlists().delete(id=args.playlist_id).execute()
+    print(f"Deleted playlist {args.playlist_id}")
+    return 0
+
+
+def _cmd_playlist_add_item(args: argparse.Namespace) -> int:
+    yt = client.youtube()
+    snippet: dict[str, Any] = {
+        "playlistId": args.playlist_id,
+        "resourceId": {"kind": "youtube#video", "videoId": args.video_id},
+    }
+    if args.position is not None:
+        snippet["position"] = args.position
+    item = yt.playlistItems().insert(part="snippet", body={"snippet": snippet}).execute()
+    if args.json:
+        print(json.dumps(item, indent=2))
+    else:
+        title = item.get("snippet", {}).get("title", "")
+        print(f"{item['id']}\t{args.video_id}\t{title}")
+    return 0
+
+
+def _cmd_playlist_remove_item(args: argparse.Namespace) -> int:
+    yt = client.youtube()
+    yt.playlistItems().delete(id=args.playlist_item_id).execute()
+    print(f"Removed playlist item {args.playlist_item_id}")
     return 0
 
 
@@ -125,17 +186,54 @@ def _build_parser() -> argparse.ArgumentParser:
     p_playlists = sub.add_parser("playlists", help="Operate on the collection of your playlists.")
     p_playlists.set_defaults(func=_help_for(p_playlists))
     pls_sub = p_playlists.add_subparsers(dest="action", metavar="<action>")
+
     pls_list = pls_sub.add_parser("list", help="List the authenticated user's playlists.")
     _add_list_flags(pls_list)
     pls_list.set_defaults(func=_cmd_playlists_list)
 
+    pls_create = pls_sub.add_parser("create", help="Create a new playlist.")
+    pls_create.add_argument("title", help="Playlist title.")
+    pls_create.add_argument("--description", default=None, help="Playlist description.")
+    pls_create.add_argument(
+        "--privacy",
+        choices=["private", "unlisted", "public"],
+        default="private",
+        help="Privacy setting (default: private).",
+    )
+    pls_create.add_argument("--json", action="store_true", help="Emit raw JSON.")
+    pls_create.set_defaults(func=_cmd_playlists_create)
+
+    pls_delete = pls_sub.add_parser("delete", help="Delete a playlist.")
+    pls_delete.add_argument("playlist_id", help="YouTube playlist ID.")
+    pls_delete.add_argument(
+        "-y", "--yes", action="store_true", help="Skip the confirmation prompt."
+    )
+    pls_delete.set_defaults(func=_cmd_playlists_delete)
+
     p_playlist = sub.add_parser("playlist", help="Operate on a single playlist.")
     p_playlist.set_defaults(func=_help_for(p_playlist))
     pl_sub = p_playlist.add_subparsers(dest="action", metavar="<action>")
+
     pl_list = pl_sub.add_parser("list", help="List the items in a playlist.")
     pl_list.add_argument("playlist_id", help="YouTube playlist ID.")
     _add_list_flags(pl_list)
     pl_list.set_defaults(func=_cmd_playlist_list)
+
+    pl_add = pl_sub.add_parser("add-item", help="Add a video to a playlist.")
+    pl_add.add_argument("playlist_id", help="YouTube playlist ID.")
+    pl_add.add_argument("video_id", help="YouTube video ID.")
+    pl_add.add_argument(
+        "--position", type=int, default=None, help="0-based insert position (default: end)."
+    )
+    pl_add.add_argument("--json", action="store_true", help="Emit raw JSON.")
+    pl_add.set_defaults(func=_cmd_playlist_add_item)
+
+    pl_remove = pl_sub.add_parser("remove-item", help="Remove an item from a playlist.")
+    pl_remove.add_argument(
+        "playlist_item_id",
+        help="Playlist item ID (NOT the video ID; see `ytcli playlist list`).",
+    )
+    pl_remove.set_defaults(func=_cmd_playlist_remove_item)
 
     return parser
 
