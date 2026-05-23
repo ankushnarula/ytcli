@@ -5,6 +5,9 @@ import sys
 from typing import Any, Callable, Iterable
 from urllib.parse import parse_qs, urlparse
 
+from google.auth.exceptions import RefreshError
+from googleapiclient.errors import HttpError
+
 from . import auth, client, config
 
 
@@ -308,7 +311,33 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _format_http_error(e: HttpError) -> str:
+    status = getattr(getattr(e, "resp", None), "status", None) or "?"
+    try:
+        body = json.loads(e.content).get("error", {})
+    except (ValueError, TypeError, AttributeError):
+        body = {}
+    errors = body.get("errors") or []
+    reason = errors[0].get("reason", "") if errors else ""
+    message = body.get("message", "")
+    head = f"HTTP {status}" + (f" {reason}" if reason else "")
+    return f"{head}: {message}" if message else head
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except KeyboardInterrupt:
+        print("Interrupted.", file=sys.stderr)
+        return 130
+    except RefreshError:
+        print(
+            "Credentials expired or revoked. Run: ytcli register",
+            file=sys.stderr,
+        )
+        return 1
+    except HttpError as e:
+        print(_format_http_error(e), file=sys.stderr)
+        return 1
