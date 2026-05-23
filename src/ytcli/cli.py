@@ -1,6 +1,5 @@
 import argparse
 import json
-import sys
 from typing import Any, Callable, Iterable
 
 from . import auth, client, config
@@ -81,23 +80,33 @@ def _add_list_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument("--max", type=int, default=None, help="Cap the number of items returned.")
 
 
+def _help_for(parser: argparse.ArgumentParser) -> Callable[[argparse.Namespace], int]:
+    def _show(_args: argparse.Namespace) -> int:
+        parser.print_help()
+        return 0
+    return _show
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ytcli",
         description="Command-line client for the YouTube Data API.",
     )
+    parser.set_defaults(func=_help_for(parser))
     sub = parser.add_subparsers(dest="command", metavar="<command>")
 
     p_register = sub.add_parser("register", help="Authenticate with YouTube and store credentials.")
     p_register.set_defaults(func=_cmd_register)
 
     p_playlists = sub.add_parser("playlists", help="Operate on the collection of your playlists.")
+    p_playlists.set_defaults(func=_help_for(p_playlists))
     pls_sub = p_playlists.add_subparsers(dest="action", metavar="<action>")
     pls_list = pls_sub.add_parser("list", help="List the authenticated user's playlists.")
     _add_list_flags(pls_list)
     pls_list.set_defaults(func=_cmd_playlists_list)
 
     p_playlist = sub.add_parser("playlist", help="Operate on a single playlist.")
+    p_playlist.set_defaults(func=_help_for(p_playlist))
     pl_sub = p_playlist.add_subparsers(dest="action", metavar="<action>")
     pl_list = pl_sub.add_parser("list", help="List the items in a playlist.")
     pl_list.add_argument("playlist_id", help="YouTube playlist ID.")
@@ -110,7 +119,4 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
-    if not getattr(args, "func", None):
-        parser.print_help(sys.stderr)
-        return 2
     return args.func(args)
