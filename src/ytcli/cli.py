@@ -115,7 +115,7 @@ PLAYLIST_ITEMS_COLUMNS: ColumnSpec = [
 ]
 
 
-PLAYLIST_CREATED_COLUMNS: ColumnSpec = [
+PLAYLIST_SUMMARY_COLUMNS: ColumnSpec = [
     ("playlistId", lambda it: it["id"]),
     ("title", lambda it: it["snippet"]["title"]),
 ]
@@ -124,6 +124,19 @@ PLAYLIST_CREATED_COLUMNS: ColumnSpec = [
 PLAYLIST_ITEM_ADDED_COLUMNS: ColumnSpec = [
     ("playlistItemId", lambda it: it["id"]),
     ("videoId", lambda it: it["snippet"]["resourceId"]["videoId"]),
+    ("title", lambda it: it["snippet"]["title"]),
+]
+
+
+SEARCH_COLUMNS: ColumnSpec = [
+    ("type", lambda it: it["id"]["kind"].replace("youtube#", "")),
+    ("id", lambda it: (
+        it["id"].get("videoId")
+        or it["id"].get("channelId")
+        or it["id"].get("playlistId")
+        or ""
+    )),
+    ("channel", lambda it: it["snippet"].get("channelTitle", "")),
     ("title", lambda it: it["snippet"]["title"]),
 ]
 
@@ -161,7 +174,44 @@ def _cmd_playlists_create(args: argparse.Namespace) -> int:
         snippet["description"] = args.description
     body = {"snippet": snippet, "status": {"privacyStatus": args.privacy}}
     pl = yt.playlists().insert(part="snippet,status", body=body).execute()
-    _emit([pl], args.format, PLAYLIST_CREATED_COLUMNS)
+    _emit([pl], args.format, PLAYLIST_SUMMARY_COLUMNS)
+    return 0
+
+
+def _cmd_playlists_update(args: argparse.Namespace) -> int:
+    if args.title is None and args.description is None and args.privacy is None:
+        print(
+            "Nothing to update. Pass at least one of --title, --description, --privacy.",
+            file=sys.stderr,
+        )
+        return 1
+    yt = client.youtube()
+    resp = yt.playlists().list(
+        part="snippet,status", id=args.playlist_id
+    ).execute()
+    items = resp.get("items") or []
+    if not items:
+        print(f"Playlist {args.playlist_id} not found.", file=sys.stderr)
+        return 1
+    current = items[0]
+    snippet = current.get("snippet", {})
+    status = current.get("status", {})
+    new_title = args.title if args.title is not None else snippet.get("title", "")
+    new_description = (
+        args.description if args.description is not None
+        else snippet.get("description", "")
+    )
+    new_privacy = (
+        args.privacy if args.privacy is not None
+        else status.get("privacyStatus", "private")
+    )
+    body = {
+        "id": args.playlist_id,
+        "snippet": {"title": new_title, "description": new_description},
+        "status": {"privacyStatus": new_privacy},
+    }
+    updated = yt.playlists().update(part="snippet,status", body=body).execute()
+    _emit([updated], args.format, PLAYLIST_SUMMARY_COLUMNS)
     return 0
 
 
@@ -197,6 +247,68 @@ def _cmd_playlist_add_item(args: argparse.Namespace) -> int:
         snippet["position"] = args.position
     item = yt.playlistItems().insert(part="snippet", body={"snippet": snippet}).execute()
     _emit([item], args.format, PLAYLIST_ITEM_ADDED_COLUMNS)
+    return 0
+
+
+def _cmd_playlist_move_item(args: argparse.Namespace) -> int:
+    video_id = _extract_video_id(args.video_id)
+    yt = client.youtube()
+    matches = _paginate(
+        yt.playlistItems().list,
+        None,
+        part="id,snippet",
+        playlistId=args.playlist_id,
+        videoId=video_id,
+        maxResults=50,
+    )
+    if not matches:
+        print(
+            f"Video {video_id} is not in playlist {args.playlist_id}.",
+            file=sys.stderr,
+        )
+        return 1
+    if len(matches) > 1:
+        print(
+            f"Video {video_id} appears {len(matches)} times in playlist "
+            f"{args.playlist_id}:",
+            file=sys.stderr,
+        )
+        for m in matches:
+            print(
+                f"  position {m['snippet']['position']}\t{m['id']}",
+                file=sys.stderr,
+            )
+        print(
+            "Ambiguous; move-item requires a unique match.",
+            file=sys.stderr,
+        )
+        return 1
+    m = matches[0]
+    body = {
+        "id": m["id"],
+        "snippet": {
+            "playlistId": args.playlist_id,
+            "resourceId": m["snippet"]["resourceId"],
+            "position": args.to,
+        },
+    }
+    updated = yt.playlistItems().update(part="snippet", body=body).execute()
+    _emit([updated], args.format, PLAYLIST_ITEM_ADDED_COLUMNS)
+    return 0
+
+
+def _cmd_search(args: argparse.Namespace) -> int:
+    yt = client.youtube()
+    params: dict[str, Any] = {
+        "part": "snippet",
+        "q": args.query,
+        "maxResults": 50,
+        "order": args.order,
+    }
+    if args.type != "all":
+        params["type"] = args.type
+    items = _paginate(yt.search().list, args.max, **params)
+    _emit(items, args.format, SEARCH_COLUMNS)
     return 0
 
 
@@ -301,6 +413,21 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_format_flag(pls_create)
     pls_create.set_defaults(func=_cmd_playlists_create)
 
+    pls_update = pls_sub.add_parser(
+        "update", help="Update a playlist's title/description/privacy."
+    )
+    pls_update.add_argument("playlist_id", help="YouTube playlist ID.")
+    pls_update.add_argument("--title", default=None, help="New title.")
+    pls_update.add_argument("--description", default=None, help="New description.")
+    pls_update.add_argument(
+        "--privacy",
+        choices=["private", "unlisted", "public"],
+        default=None,
+        help="New privacy setting.",
+    )
+    _add_format_flag(pls_update)
+    pls_update.set_defaults(func=_cmd_playlists_update)
+
     pls_delete = pls_sub.add_parser("delete", help="Delete a playlist.")
     pls_delete.add_argument("playlist_id", help="YouTube playlist ID.")
     pls_delete.add_argument(
@@ -329,6 +456,23 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_format_flag(pl_add)
     pl_add.set_defaults(func=_cmd_playlist_add_item)
 
+    pl_move = pl_sub.add_parser(
+        "move-item", help="Move a video to a new position in its playlist."
+    )
+    pl_move.add_argument("playlist_id", help="YouTube playlist ID.")
+    pl_move.add_argument(
+        "video_id",
+        help="YouTube video ID or any youtube.com/youtu.be URL.",
+    )
+    pl_move.add_argument(
+        "--to",
+        type=int,
+        required=True,
+        help="New 0-based position in the playlist.",
+    )
+    _add_format_flag(pl_move)
+    pl_move.set_defaults(func=_cmd_playlist_move_item)
+
     pl_remove = pl_sub.add_parser("remove-item", help="Remove a video from a playlist.")
     pl_remove.add_argument("playlist_id", help="YouTube playlist ID.")
     pl_remove.add_argument(
@@ -341,6 +485,29 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Remove every occurrence if the video appears in the playlist multiple times.",
     )
     pl_remove.set_defaults(func=_cmd_playlist_remove_item)
+
+    p_search = sub.add_parser(
+        "search",
+        help="Search YouTube (100 quota units per call).",
+    )
+    p_search.add_argument("query", help="Search query.")
+    p_search.add_argument(
+        "--type",
+        choices=["video", "channel", "playlist", "all"],
+        default="video",
+        help="Filter by resource type (default: video).",
+    )
+    p_search.add_argument(
+        "--order",
+        choices=["relevance", "date", "rating", "title", "viewCount", "videoCount"],
+        default="relevance",
+        help="Sort order (default: relevance).",
+    )
+    p_search.add_argument(
+        "--max", type=int, default=25, help="Max results (default: 25)."
+    )
+    _add_format_flag(p_search)
+    p_search.set_defaults(func=_cmd_search)
 
     return parser
 
