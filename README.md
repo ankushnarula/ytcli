@@ -28,20 +28,25 @@ Re-run `ytcli register` at any time to re-authenticate.
 ytcli register   [--reset]                                   # OAuth setup; --reset re-prompts for client_id/secret
 ytcli unregister [--all]                                     # Clear credentials; --all also clears the OAuth client
 
-ytcli playlists list [--json] [--max N]                      # Your playlists
+ytcli playlists list   [--format tsv|table|json] [--max N]   # Your playlists
 ytcli playlists create <title> [--description D]             #   ...new playlist (default privacy: private)
                        [--privacy private|unlisted|public]
-                       [--json]
+                       [--format tsv|table|json]
 ytcli playlists delete <playlist_id> [-y]                    #   ...delete (prompts unless -y)
 
-ytcli playlist list <playlist_id> [--json] [--max N]         # Items in a playlist
+ytcli playlist list <playlist_id>                            # Items in a playlist
+                    [--format tsv|table|json] [--max N]
 ytcli playlist add-item <playlist_id> <video>                #   ...append (or --position N)
-                        [--position N] [--json]
+                        [--position N] [--format tsv|table|json]
 ytcli playlist remove-item <playlist_id> <video> [--all]     #   ...remove (errors on duplicates without --all)
 ```
 
 `<video>` is either an 11-char YouTube video ID or any youtube.com/youtu.be URL.
-`playlist list` prints `position \t playlistItemId \t videoId \t title` (tab-separated).
+
+**Output formats** (all data-emitting commands):
+- `tsv` (default) — tab-separated, no headers. Script-friendly: pipe to `cut`, `awk`, etc.
+- `table` — aligned columns with headers + separator. For interactive reading.
+- `json` — the raw YouTube Data API resource objects. For `jq` pipelines.
 
 `playlists list` lists your playlists. `playlist list <id>` lists the items
 inside one playlist. Both auto-paginate; `--max` caps the result count and

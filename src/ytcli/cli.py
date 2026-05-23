@@ -2,7 +2,7 @@ import argparse
 import json
 import re
 import sys
-from typing import Any, Callable, Iterable
+from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
 from google.auth.exceptions import RefreshError
@@ -75,12 +75,57 @@ def _paginate(list_fn: Callable[..., Any], max_items: int | None, **params: Any)
     return items
 
 
-def _emit(items: Iterable[dict], as_json: bool, formatter: Callable[[dict], str]) -> None:
-    if as_json:
-        print(json.dumps(list(items), indent=2))
+ColumnSpec = list[tuple[str, Callable[[dict], Any]]]
+
+
+def _emit(items: list[dict], fmt: str, columns: ColumnSpec) -> None:
+    if fmt == "json":
+        print(json.dumps(items, indent=2))
         return
-    for it in items:
-        print(formatter(it))
+    rows = [[str(getter(it)) for _, getter in columns] for it in items]
+    if fmt == "tsv":
+        for r in rows:
+            print("\t".join(r))
+        return
+    # table
+    headers = [name for name, _ in columns]
+    widths = [
+        max(len(headers[i]), max((len(r[i]) for r in rows), default=0))
+        for i in range(len(headers))
+    ]
+    line = "  ".join(f"{{:<{w}}}" for w in widths)
+    print(line.format(*headers))
+    print(line.format(*("-" * w for w in widths)))
+    for r in rows:
+        print(line.format(*r))
+
+
+PLAYLISTS_COLUMNS: ColumnSpec = [
+    ("playlistId", lambda it: it["id"]),
+    ("items", lambda it: it["contentDetails"]["itemCount"]),
+    ("title", lambda it: it["snippet"]["title"]),
+]
+
+
+PLAYLIST_ITEMS_COLUMNS: ColumnSpec = [
+    ("pos", lambda it: it["snippet"]["position"]),
+    ("playlistItemId", lambda it: it["id"]),
+    ("videoId", lambda it: it["snippet"]["resourceId"]["videoId"]),
+    ("title", lambda it: it["snippet"]["title"]),
+]
+
+
+PLAYLIST_CREATED_COLUMNS: ColumnSpec = [
+    ("playlistId", lambda it: it["id"]),
+    ("title", lambda it: it["snippet"]["title"]),
+]
+
+
+PLAYLIST_ITEM_ADDED_COLUMNS: ColumnSpec = [
+    ("playlistItemId", lambda it: it["id"]),
+    ("videoId", lambda it: it["snippet"]["resourceId"]["videoId"]),
+    ("title", lambda it: it["snippet"]["title"]),
+]
 
 
 def _cmd_playlists_list(args: argparse.Namespace) -> int:
@@ -92,11 +137,7 @@ def _cmd_playlists_list(args: argparse.Namespace) -> int:
         mine=True,
         maxResults=50,
     )
-    _emit(
-        items,
-        args.json,
-        lambda it: f"{it['id']}\t{it['contentDetails']['itemCount']:>4}\t{it['snippet']['title']}",
-    )
+    _emit(items, args.format, PLAYLISTS_COLUMNS)
     return 0
 
 
@@ -105,20 +146,11 @@ def _cmd_playlist_list(args: argparse.Namespace) -> int:
     items = _paginate(
         yt.playlistItems().list,
         args.max,
-        part="snippet,contentDetails",
+        part="snippet",
         playlistId=args.playlist_id,
         maxResults=50,
     )
-    _emit(
-        items,
-        args.json,
-        lambda it: (
-            f"{it['snippet']['position']}\t"
-            f"{it['id']}\t"
-            f"{it['contentDetails']['videoId']}\t"
-            f"{it['snippet']['title']}"
-        ),
-    )
+    _emit(items, args.format, PLAYLIST_ITEMS_COLUMNS)
     return 0
 
 
@@ -129,10 +161,7 @@ def _cmd_playlists_create(args: argparse.Namespace) -> int:
         snippet["description"] = args.description
     body = {"snippet": snippet, "status": {"privacyStatus": args.privacy}}
     pl = yt.playlists().insert(part="snippet,status", body=body).execute()
-    if args.json:
-        print(json.dumps(pl, indent=2))
-    else:
-        print(f"{pl['id']}\t{pl['snippet']['title']}")
+    _emit([pl], args.format, PLAYLIST_CREATED_COLUMNS)
     return 0
 
 
@@ -167,11 +196,7 @@ def _cmd_playlist_add_item(args: argparse.Namespace) -> int:
     if args.position is not None:
         snippet["position"] = args.position
     item = yt.playlistItems().insert(part="snippet", body={"snippet": snippet}).execute()
-    if args.json:
-        print(json.dumps(item, indent=2))
-    else:
-        title = item.get("snippet", {}).get("title", "")
-        print(f"{item['id']}\t{video_id}\t{title}")
+    _emit([item], args.format, PLAYLIST_ITEM_ADDED_COLUMNS)
     return 0
 
 
@@ -211,8 +236,17 @@ def _cmd_playlist_remove_item(args: argparse.Namespace) -> int:
     return 0
 
 
+def _add_format_flag(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--format",
+        choices=["tsv", "table", "json"],
+        default="tsv",
+        help="Output format (default: tsv).",
+    )
+
+
 def _add_list_flags(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--json", action="store_true", help="Emit raw JSON.")
+    _add_format_flag(p)
     p.add_argument("--max", type=int, default=None, help="Cap the number of items returned.")
 
 
@@ -264,7 +298,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default="private",
         help="Privacy setting (default: private).",
     )
-    pls_create.add_argument("--json", action="store_true", help="Emit raw JSON.")
+    _add_format_flag(pls_create)
     pls_create.set_defaults(func=_cmd_playlists_create)
 
     pls_delete = pls_sub.add_parser("delete", help="Delete a playlist.")
@@ -292,7 +326,7 @@ def _build_parser() -> argparse.ArgumentParser:
     pl_add.add_argument(
         "--position", type=int, default=None, help="0-based insert position (default: end)."
     )
-    pl_add.add_argument("--json", action="store_true", help="Emit raw JSON.")
+    _add_format_flag(pl_add)
     pl_add.set_defaults(func=_cmd_playlist_add_item)
 
     pl_remove = pl_sub.add_parser("remove-item", help="Remove a video from a playlist.")
